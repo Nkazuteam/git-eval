@@ -13,6 +13,15 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 app = FastAPI(title="Git-Eval Webhook API")
 
 
+@app.get("/health")
+async def health():
+    return {
+        "status": "ok",
+        "bot_ready": bot.is_ready(),
+        "bot_user": str(bot.user) if bot.user else None,
+    }
+
+
 @bot.event
 async def on_ready():
     guild = discord.Object(id=GUILD_ID)
@@ -28,16 +37,13 @@ async def _start_api():
 
 
 async def main():
-    # Load cogs
     await bot.load_extension("bot.cogs.register")
     await bot.load_extension("bot.cogs.status")
     await bot.load_extension("bot.cogs.guide")
 
-    # Mount webhook router
     from bot.api.webhook import router
     app.include_router(router)
 
-    # Run Bot + API concurrently
     async with bot:
         await asyncio.gather(
             bot.start(DISCORD_TOKEN),

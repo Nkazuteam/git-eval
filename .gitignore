@@ -27,3 +27,6 @@ Desktop.ini
 # Environment variables
 .env
 .env.local
+
+# User data (scores, registrations)
+bot/data/users.json
