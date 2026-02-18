@@ -3,8 +3,6 @@ name: Git-Eval D Rank
 on:
   push:
     branches: ["**"]
-  pull_request:
-    branches: [main]
 
 jobs:
   evaluate:
@@ -21,27 +19,27 @@ jobs:
           CI_FEEDBACK=""
           TOTAL_MSGS=$(git rev-list --count HEAD)
 
-          # Meaningful commit messages (15pts)
+          # Meaningful commit messages (20pts)
           BAD_MSGS=$(git log --format='%s' | grep -ciE '^(initial commit|update|fix|test|asdf|aaa|wip|tmp|\.+)$' || true)
           if [ "$TOTAL_MSGS" -gt 0 ]; then
             GOOD_RATIO=$(( (TOTAL_MSGS - BAD_MSGS) * 100 / TOTAL_MSGS ))
             if [ "$GOOD_RATIO" -ge 80 ]; then
-              CI_SCORE=$((CI_SCORE + 15))
+              CI_SCORE=$((CI_SCORE + 20))
               CI_FEEDBACK="${CI_FEEDBACK}✅ コミットメッセージが具体的 (${GOOD_RATIO}%)\n"
             elif [ "$GOOD_RATIO" -ge 50 ]; then
-              CI_SCORE=$((CI_SCORE + 8))
+              CI_SCORE=$((CI_SCORE + 10))
               CI_FEEDBACK="${CI_FEEDBACK}⚠️ コミットメッセージをもう少し具体的に\n"
             else
               CI_FEEDBACK="${CI_FEEDBACK}❌ コミットメッセージが抽象的すぎます\n"
             fi
           fi
 
-          # Multiple commits (10pts)
+          # Multiple commits (15pts)
           if [ "$TOTAL_MSGS" -ge 5 ]; then
-            CI_SCORE=$((CI_SCORE + 10))
+            CI_SCORE=$((CI_SCORE + 15))
             CI_FEEDBACK="${CI_FEEDBACK}✅ コミット分割 OK (${TOTAL_MSGS})\n"
           elif [ "$TOTAL_MSGS" -ge 3 ]; then
-            CI_SCORE=$((CI_SCORE + 5))
+            CI_SCORE=$((CI_SCORE + 8))
             CI_FEEDBACK="${CI_FEEDBACK}⚠️ もう少し細かくコミットを\n"
           else
             CI_FEEDBACK="${CI_FEEDBACK}❌ コミット数が少なすぎます\n"
@@ -60,14 +58,6 @@ jobs:
             else
               CI_FEEDBACK="${CI_FEEDBACK}❌ ブランチを切って作業しましょう\n"
             fi
-          fi
-
-          # PR (10pts)
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            CI_SCORE=$((CI_SCORE + 10))
-            CI_FEEDBACK="${CI_FEEDBACK}✅ PR 作成済み\n"
-          else
-            CI_FEEDBACK="${CI_FEEDBACK}⏭️ PR 経由だとボーナスあり\n"
           fi
 
           # No CRLF (10pts)
@@ -202,7 +192,8 @@ jobs:
             --arg user "${{ github.actor }}" \
             --argjson score "$TOTAL" \
             --arg feedback "$FEEDBACK" \
-            '{github_username: $user, score: $score, feedback: $feedback}')
+            --arg rank "D" \
+            '{github_username: $user, score: $score, feedback: $feedback, rank: $rank}')
 
           SIG=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/^.* //')
 

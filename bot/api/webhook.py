@@ -19,7 +19,7 @@ class EvalResult(BaseModel):
     github_username: str
     score: int
     feedback: str
-    skip_to_rank: str | None = None
+    rank: str | None = None
 
 
 def _verify_signature(body: bytes, signature: str) -> bool:
@@ -73,15 +73,9 @@ async def receive_eval(request: Request):
 
     discord_id, user_data = result
 
-    # Apply skip-grade if applicable
-    if payload.skip_to_rank and payload.skip_to_rank in RANKS:
-        old_rank, new_rank, new_score = score_service.apply_skip_grade(
-            discord_id, payload.skip_to_rank
-        )
-    else:
-        old_rank, new_rank, new_score = score_service.add_score(
-            discord_id, payload.score
-        )
+    old_rank, new_rank, new_score = score_service.add_score(
+        discord_id, payload.score, eval_rank=payload.rank
+    )
 
     # Update Discord role and send notification if promoted
     from bot.state import bot

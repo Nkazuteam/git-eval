@@ -192,7 +192,8 @@ jobs:
             --arg user "${{ github.actor }}" \
             --argjson score "$TOTAL" \
             --arg feedback "$FEEDBACK" \
-            '{github_username: $user, score: $score, feedback: $feedback}')
+            --arg rank "E" \
+            '{github_username: $user, score: $score, feedback: $feedback, rank: $rank}')
 
           SIG=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/^.* //')
 

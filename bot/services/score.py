@@ -58,25 +58,28 @@ def score_for_next_rank(current_rank: str, current_score: int) -> int | None:
     return RANK_THRESHOLDS[next_rank] - current_score
 
 
-def add_score(discord_id: str, points: int) -> tuple[str, str, int]:
-    """Add points and return (old_rank, new_rank, new_score)."""
+SKIP_GRADE_THRESHOLD = 70  # Score needed to trigger skip-grade
+
+
+def add_score(
+    discord_id: str, points: int, eval_rank: str | None = None
+) -> tuple[str, str, int]:
+    """Add points, check skip-grade, return (old_rank, new_rank, new_score)."""
     users = _load_users()
     user = users[discord_id]
     old_rank = user["rank"]
+
     user["score"] += points
-    user["rank"] = determine_rank(user["score"])
-    _save_users(users)
-    return old_rank, user["rank"], user["score"]
 
+    # Skip-grade: if evaluated at a higher rank and scored well, jump there
+    if eval_rank and eval_rank in RANKS:
+        old_idx = RANKS.index(old_rank)
+        eval_idx = RANKS.index(eval_rank)
+        if eval_idx > old_idx and points >= SKIP_GRADE_THRESHOLD:
+            threshold = RANK_THRESHOLDS[eval_rank]
+            if user["score"] < threshold:
+                user["score"] = threshold + points
 
-def apply_skip_grade(discord_id: str, target_rank: str) -> tuple[str, str, int]:
-    """Skip-grade: set score to at least the target rank threshold."""
-    users = _load_users()
-    user = users[discord_id]
-    old_rank = user["rank"]
-    threshold = RANK_THRESHOLDS[target_rank]
-    if user["score"] < threshold:
-        user["score"] = threshold
     user["rank"] = determine_rank(user["score"])
     _save_users(users)
     return old_rank, user["rank"], user["score"]
