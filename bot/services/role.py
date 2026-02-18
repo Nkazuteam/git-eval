@@ -11,9 +11,23 @@ def _role_name(rank: str) -> str:
     return f"Git-Eval: {rank} ({RANK_NAMES[rank]})"
 
 
+async def ensure_role(guild: discord.Guild, member: discord.Member, rank: str) -> None:
+    """Ensure member has the correct rank role (add if missing)."""
+    role_name = _role_name(rank)
+    role = discord.utils.get(guild.roles, name=role_name)
+    if not role:
+        role = await guild.create_role(name=role_name)
+        logger.info("Created role: %s", role_name)
+    if role not in member.roles:
+        await member.add_roles(role)
+        logger.info("Ensured role %s for %s", role_name, member)
+
+
 async def update_role(guild: discord.Guild, member: discord.Member, old_rank: str, new_rank: str) -> bool:
     """Update member's rank role. Returns True if rank actually changed."""
     if old_rank == new_rank:
+        # Even if rank didn't change, ensure member has the role
+        await ensure_role(guild, member, new_rank)
         return False
 
     old_role_name = _role_name(old_rank)

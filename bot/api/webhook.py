@@ -117,12 +117,13 @@ async def receive_eval(request: Request):
                     if promoted:
                         embed_title += f" (昇格: {old_rank} → {new_rank}!)"
 
+                    feedback_text = payload.feedback.replace("\\n", "\n")
                     embed = discord.Embed(
                         title=embed_title,
                         description=(
                             f"**スコア:** +{payload.score} pt (累積: {new_score} pt)\n"
                             f"**ランク:** {new_rank}\n\n"
-                            f"**フィードバック:**\n{payload.feedback}"
+                            f"**フィードバック:**\n{feedback_text}"
                         ),
                         color=discord.Color.green() if promoted else discord.Color.blue(),
                     )
