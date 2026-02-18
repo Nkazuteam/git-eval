@@ -55,11 +55,24 @@ async def receive_eval(request: Request):
 
     # Update Discord role and send notification if promoted
     from bot.main import bot
+    import logging
+
+    logger = logging.getLogger(__name__)
 
     guild = bot.get_guild(GUILD_ID)
     promoted = False
-    if guild:
+    if not guild:
+        logger.warning("Guild %s not found", GUILD_ID)
+    else:
+        # get_member uses cache only; fall back to API fetch
         member = guild.get_member(int(discord_id))
+        if not member:
+            try:
+                member = await guild.fetch_member(int(discord_id))
+            except discord.NotFound:
+                member = None
+                logger.warning("Member %s not found in guild", discord_id)
+
         if member:
             promoted = await update_role(guild, member, old_rank, new_rank)
             if promoted:
@@ -82,7 +95,9 @@ async def receive_eval(request: Request):
                 )
                 await member.send(embed=embed)
             except discord.Forbidden:
-                pass  # DM disabled
+                logger.info("DM blocked by %s", member)
+            except Exception as e:
+                logger.error("Failed to send DM: %s", e)
 
     return {
         "status": "ok",

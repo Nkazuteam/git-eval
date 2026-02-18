@@ -32,11 +32,17 @@ async def update_role(guild: discord.Guild, member: discord.Member, old_rank: st
 async def send_promotion_notification(
     guild: discord.Guild, member: discord.Member, new_rank: str
 ) -> None:
+    import logging
+    logger = logging.getLogger(__name__)
+
     if not NOTIFICATION_CHANNEL_ID:
+        logger.warning("NOTIFICATION_CHANNEL_ID not set, skipping notification")
         return
     channel = guild.get_channel(NOTIFICATION_CHANNEL_ID)
     if not channel or not isinstance(channel, discord.TextChannel):
+        logger.warning("Channel %s not found or not a text channel", NOTIFICATION_CHANNEL_ID)
         return
+    logger.info("Sending promotion notification to #%s", channel.name)
 
     rank_label = f"{new_rank} ({RANK_NAMES[new_rank]})"
     embed = discord.Embed(
