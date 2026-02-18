@@ -1,15 +1,11 @@
 import asyncio
 import discord
-from discord.ext import commands
 import uvicorn
 from fastapi import FastAPI
 
 from bot.config import DISCORD_TOKEN, GUILD_ID, RANKS, RANK_NAMES
+from bot.state import bot
 
-intents = discord.Intents.default()
-intents.members = True
-
-bot = commands.Bot(command_prefix="!", intents=intents)
 app = FastAPI(title="Git-Eval Webhook API")
 
 

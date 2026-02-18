@@ -32,7 +32,7 @@ def _verify_signature(body: bytes, signature: str) -> bool:
 @router.get("/debug")
 async def debug_status():
     """Check bot connectivity — for debugging only."""
-    from bot.main import bot
+    from bot.state import bot
     from bot.config import NOTIFICATION_CHANNEL_ID
 
     info = {
@@ -84,7 +84,7 @@ async def receive_eval(request: Request):
         )
 
     # Update Discord role and send notification if promoted
-    from bot.main import bot
+    from bot.state import bot
 
     guild = bot.get_guild(GUILD_ID)
     promoted = False
