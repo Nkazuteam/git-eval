@@ -1,0 +1,49 @@
+import asyncio
+import discord
+from discord.ext import commands
+import uvicorn
+from fastapi import FastAPI
+
+from bot.config import DISCORD_TOKEN, GUILD_ID
+
+intents = discord.Intents.default()
+intents.members = True
+
+bot = commands.Bot(command_prefix="!", intents=intents)
+app = FastAPI(title="Git-Eval Webhook API")
+
+
+@bot.event
+async def on_ready():
+    guild = discord.Object(id=GUILD_ID)
+    bot.tree.copy_global_to(guild=guild)
+    await bot.tree.sync(guild=guild)
+    print(f"Bot ready: {bot.user} | Guild: {GUILD_ID}")
+
+
+async def _start_api():
+    config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
+    server = uvicorn.Server(config)
+    await server.serve()
+
+
+async def main():
+    # Load cogs
+    await bot.load_extension("bot.cogs.register")
+    await bot.load_extension("bot.cogs.status")
+    await bot.load_extension("bot.cogs.guide")
+
+    # Mount webhook router
+    from bot.api.webhook import router
+    app.include_router(router)
+
+    # Run Bot + API concurrently
+    async with bot:
+        await asyncio.gather(
+            bot.start(DISCORD_TOKEN),
+            _start_api(),
+        )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
