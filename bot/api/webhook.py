@@ -29,6 +29,33 @@ def _verify_signature(body: bytes, signature: str) -> bool:
     return hmac.compare_digest(f"sha256={expected}", signature)
 
 
+@router.get("/debug")
+async def debug_status():
+    """Check bot connectivity — for debugging only."""
+    from bot.main import bot
+    from bot.config import NOTIFICATION_CHANNEL_ID
+
+    info = {
+        "bot_ready": bot.is_ready(),
+        "bot_user": str(bot.user) if bot.user else None,
+        "guild_id": GUILD_ID,
+        "notification_channel_id": NOTIFICATION_CHANNEL_ID,
+    }
+
+    guild = bot.get_guild(GUILD_ID)
+    if guild:
+        info["guild_name"] = guild.name
+        info["guild_member_count"] = guild.member_count
+        info["bot_permissions"] = dict(guild.me.guild_permissions) if guild.me else "bot not in guild"
+        channel = guild.get_channel(NOTIFICATION_CHANNEL_ID) if NOTIFICATION_CHANNEL_ID else None
+        info["notification_channel"] = channel.name if channel else "NOT FOUND"
+        info["roles"] = [r.name for r in guild.roles if r.name.startswith("Git-Eval")]
+    else:
+        info["guild"] = "NOT FOUND"
+
+    return info
+
+
 @router.post("/eval")
 async def receive_eval(request: Request):
     # Signature verification
@@ -61,43 +88,50 @@ async def receive_eval(request: Request):
 
     guild = bot.get_guild(GUILD_ID)
     promoted = False
-    if not guild:
-        logger.warning("Guild %s not found", GUILD_ID)
-    else:
-        # get_member uses cache only; fall back to API fetch
-        member = guild.get_member(int(discord_id))
-        if not member:
-            try:
-                member = await guild.fetch_member(int(discord_id))
-            except discord.NotFound:
-                member = None
-                logger.warning("Member %s not found in guild", discord_id)
+    discord_error = None
 
-        if member:
-            promoted = await update_role(guild, member, old_rank, new_rank)
-            if promoted:
-                await send_promotion_notification(guild, member, new_rank)
+    try:
+        if not guild:
+            discord_error = f"Guild {GUILD_ID} not found. bot.guilds={[g.id for g in bot.guilds]}"
+            logger.warning(discord_error)
+        else:
+            # get_member uses cache only; fall back to API fetch
+            member = guild.get_member(int(discord_id))
+            if not member:
+                try:
+                    member = await guild.fetch_member(int(discord_id))
+                except discord.NotFound:
+                    member = None
 
-            # Send DM with feedback
-            try:
-                embed_title = "評価結果"
+            if not member:
+                discord_error = f"Member {discord_id} not found in guild {guild.name}"
+                logger.warning(discord_error)
+            else:
+                promoted = await update_role(guild, member, old_rank, new_rank)
                 if promoted:
-                    embed_title += f" (昇格: {old_rank} → {new_rank}!)"
+                    await send_promotion_notification(guild, member, new_rank)
 
-                embed = discord.Embed(
-                    title=embed_title,
-                    description=(
-                        f"**スコア:** +{payload.score} pt (累積: {new_score} pt)\n"
-                        f"**ランク:** {new_rank}\n\n"
-                        f"**フィードバック:**\n{payload.feedback}"
-                    ),
-                    color=discord.Color.green() if promoted else discord.Color.blue(),
-                )
-                await member.send(embed=embed)
-            except discord.Forbidden:
-                logger.info("DM blocked by %s", member)
-            except Exception as e:
-                logger.error("Failed to send DM: %s", e)
+                # Send DM with feedback
+                try:
+                    embed_title = "評価結果"
+                    if promoted:
+                        embed_title += f" (昇格: {old_rank} → {new_rank}!)"
+
+                    embed = discord.Embed(
+                        title=embed_title,
+                        description=(
+                            f"**スコア:** +{payload.score} pt (累積: {new_score} pt)\n"
+                            f"**ランク:** {new_rank}\n\n"
+                            f"**フィードバック:**\n{payload.feedback}"
+                        ),
+                        color=discord.Color.green() if promoted else discord.Color.blue(),
+                    )
+                    await member.send(embed=embed)
+                except discord.Forbidden:
+                    logger.info("DM blocked by %s", member)
+    except Exception as e:
+        discord_error = f"{type(e).__name__}: {e}"
+        logger.error("Discord operation failed: %s", discord_error)
 
     return {
         "status": "ok",
@@ -106,4 +140,5 @@ async def receive_eval(request: Request):
         "new_rank": new_rank,
         "score": new_score,
         "promoted": promoted,
+        "discord_error": discord_error,
     }
