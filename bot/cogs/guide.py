@@ -3,15 +3,25 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot.services import score as score_service
-from bot.config import RANK_NAMES
+from bot.config import RANK_NAMES, TEMPLATE_REPO_URL
 
 GUIDE_TEXTS: dict[str, str] = {
     "G": (
         "**【G ランク: Generalist】― ターミナルと Git の基礎 【AI 利用禁止】**\n\n"
         "覚えれば効率が爆上がりするものを、自分の手で叩いて身につけるランクです。\n"
         "このランクだけは AI 禁止。自力で覚えることに意味があります。\n\n"
+        "■ やること\n"
+        f"1. テンプレートリポジトリを clone する\n"
+        f"   `git clone {TEMPLATE_REPO_URL}`\n"
+        "2. ターミナルで clone したフォルダに `cd` で移動する\n"
+        "3. `mkdir` でフォルダを作り、その中にファイルを作成する\n"
+        "4. `git add` → `git commit` で変更を記録する\n"
+        "5. ブランチを切る: `git switch -c my-first-branch`\n"
+        "6. ブランチ上でファイルを編集して commit する\n"
+        "7. GitHub に `git push` する\n"
+        "8. GitHub 上で PR を作成してマージする\n\n"
         "■ 評価ポイント\n"
-        "- ターミナル基礎: `cd`, `ls`, `mkdir`, `cp`, `mv`, `rm`, `code .` 等\n"
+        "- ターミナル基礎: `cd`, `ls`, `mkdir`, `cp`, `mv`, `rm` 等\n"
         "- パスの理解: 絶対パス・相対パスの違い\n"
         "- Git 基礎: `init`, `add`, `commit`, `push`, `pull`, `clone`\n"
         "- ブランチ操作: `branch` / `switch -c`\n"

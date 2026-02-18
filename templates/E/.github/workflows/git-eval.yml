@@ -1,0 +1,187 @@
+name: Git-Eval E Rank
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: CI checks
+        id: ci
+        run: |
+          CI_SCORE=0
+          CI_FEEDBACK=""
+
+          # Source files exist (10pts)
+          SRC_COUNT=$(find . -path './.git' -prune -o \( -name '*.py' -o -name '*.js' -o -name '*.ts' -o -name '*.go' -o -name '*.rs' -o -name '*.java' -o -name '*.c' -o -name '*.cpp' -o -name '*.rb' -o -name '*.php' \) -print | wc -l)
+          if [ "$SRC_COUNT" -gt 0 ]; then
+            CI_SCORE=$((CI_SCORE + 10))
+            CI_FEEDBACK="${CI_FEEDBACK}✅ ソースファイル ${SRC_COUNT} 個\n"
+          else
+            CI_FEEDBACK="${CI_FEEDBACK}❌ ソースファイルが見つかりません\n"
+          fi
+
+          # git-eval-config.json (5pts)
+          RUN_CMD=""
+          if [ -f git-eval-config.json ]; then
+            CI_SCORE=$((CI_SCORE + 5))
+            CI_FEEDBACK="${CI_FEEDBACK}✅ git-eval-config.json あり\n"
+            RUN_CMD=$(jq -r '.run // empty' git-eval-config.json)
+          else
+            CI_FEEDBACK="${CI_FEEDBACK}❌ git-eval-config.json がありません\n"
+          fi
+
+          # Program runs (20pts)
+          if [ -n "$RUN_CMD" ]; then
+            if timeout 30 bash -c "$RUN_CMD" > /tmp/run_output 2>&1; then
+              CI_SCORE=$((CI_SCORE + 20))
+              CI_FEEDBACK="${CI_FEEDBACK}✅ プログラム実行成功\n"
+            else
+              CI_FEEDBACK="${CI_FEEDBACK}❌ プログラム実行失敗\n"
+            fi
+          else
+            CI_FEEDBACK="${CI_FEEDBACK}⏭️ 実行コマンド未設定\n"
+          fi
+
+          # Uses functions (10pts)
+          if grep -rEl '(def |function |func |fn |public |private )' --include='*.py' --include='*.js' --include='*.ts' --include='*.go' --include='*.rs' --include='*.java' --include='*.rb' . 2>/dev/null | grep -q .; then
+            CI_SCORE=$((CI_SCORE + 10))
+            CI_FEEDBACK="${CI_FEEDBACK}✅ 関数/メソッド使用\n"
+          else
+            CI_FEEDBACK="${CI_FEEDBACK}❌ 関数/メソッドを使いましょう\n"
+          fi
+
+          # Uses control flow (10pts)
+          if grep -rEl '(if |else|for |while |switch |match )' --include='*.py' --include='*.js' --include='*.ts' --include='*.go' --include='*.rs' --include='*.java' --include='*.rb' . 2>/dev/null | grep -q .; then
+            CI_SCORE=$((CI_SCORE + 10))
+            CI_FEEDBACK="${CI_FEEDBACK}✅ 条件分岐・ループ使用\n"
+          else
+            CI_FEEDBACK="${CI_FEEDBACK}❌ 条件分岐やループを使いましょう\n"
+          fi
+
+          # No CRLF (5pts)
+          if grep -rPl '\r$' --include='*.py' --include='*.js' --include='*.ts' --include='*.go' --include='*.rs' --include='*.java' . 2>/dev/null | grep -q .; then
+            CI_FEEDBACK="${CI_FEEDBACK}❌ CRLF 検出\n"
+          else
+            CI_SCORE=$((CI_SCORE + 5))
+            CI_FEEDBACK="${CI_FEEDBACK}✅ 改行コード OK\n"
+          fi
+
+          echo "ci_score=$CI_SCORE" >> $GITHUB_OUTPUT
+          {
+            echo "ci_feedback<<CI_EOF"
+            echo -e "$CI_FEEDBACK"
+            echo "CI_EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Collect source code
+        id: source
+        run: |
+          {
+            echo "code<<CODE_EOF"
+            find . -path './.git' -prune -o -path './node_modules' -prune -o \
+              \( -name '*.py' -o -name '*.js' -o -name '*.ts' -o -name '*.go' -o -name '*.rs' -o -name '*.java' -o -name '*.rb' \) \
+              -print | head -15 | while read f; do
+              echo "=== $f ==="
+              head -150 "$f"
+            done
+            echo "CODE_EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: LLM evaluation
+        id: llm
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "llm_score=0" >> $GITHUB_OUTPUT
+            echo "llm_feedback=⏭️ ANTHROPIC_API_KEY 未設定のため LLM 評価スキップ" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          SOURCE_CODE="${{ steps.source.outputs.code }}"
+
+          PROMPT="あなたはプログラミング講師です。以下のコードを E ランク（Emerging: 基本的なコードが書ける）の基準で評価してください。
+
+          E ランクは「小さなプログラムが動く」ことがゴールです。高度な設計は求めません。
+
+          評価基準（各項目 0〜指定点で採点）:
+          1. コードが意図通りに動いているか: 0〜20 点
+          2. 基本的な書き方（変数名、インデント、構造）: 0〜20 点
+
+          必ず以下の JSON 形式で回答:
+          {\"intent\": 点数, \"basics\": 点数, \"feedback\": \"日本語で初心者向けの優しいフィードバック\"}
+
+          コード:
+          ${SOURCE_CODE}"
+
+          RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "$(jq -n \
+              --arg prompt "$PROMPT" \
+              '{model: "claude-sonnet-4-20250514", max_tokens: 1024, messages: [{role: "user", content: $prompt}]}')")
+
+          LLM_TEXT=$(echo "$RESPONSE" | jq -r '.content[0].text // empty')
+
+          if [ -n "$LLM_TEXT" ]; then
+            LLM_JSON=$(echo "$LLM_TEXT" | grep -oP '\{[^{}]*\}' | head -1)
+            if [ -n "$LLM_JSON" ]; then
+              INTENT=$(echo "$LLM_JSON" | jq -r '.intent // 0')
+              BASICS=$(echo "$LLM_JSON" | jq -r '.basics // 0')
+              LLM_FB=$(echo "$LLM_JSON" | jq -r '.feedback // "評価完了"')
+              LLM_SCORE=$((INTENT + BASICS))
+              echo "llm_score=$LLM_SCORE" >> $GITHUB_OUTPUT
+              {
+                echo "llm_feedback<<LLM_EOF"
+                echo "📝 意図通りか ${INTENT}/20 | 基本的な書き方 ${BASICS}/20"
+                echo "$LLM_FB"
+                echo "LLM_EOF"
+              } >> $GITHUB_OUTPUT
+            else
+              echo "llm_score=0" >> $GITHUB_OUTPUT
+              echo "llm_feedback=⚠️ LLM 応答の解析に失敗" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "llm_score=0" >> $GITHUB_OUTPUT
+            echo "llm_feedback=⚠️ LLM API エラー" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send results to Git-Eval
+        if: always()
+        env:
+          WEBHOOK_SECRET: ${{ secrets.GIT_EVAL_SECRET }}
+          WEBHOOK_URL: ${{ secrets.GIT_EVAL_URL }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ] || [ -z "$WEBHOOK_SECRET" ]; then
+            echo "Webhook not configured, skipping"
+            exit 0
+          fi
+
+          CI_SCORE=${{ steps.ci.outputs.ci_score }}
+          LLM_SCORE=${{ steps.llm.outputs.llm_score }}
+          TOTAL=$((CI_SCORE + LLM_SCORE))
+
+          FEEDBACK="【CI/CD チェック (60点)】\n${{ steps.ci.outputs.ci_feedback }}\n【LLM 評価 (40点)】\n${{ steps.llm.outputs.llm_feedback }}\n\n合計スコア: ${TOTAL}/100"
+
+          BODY=$(jq -n \
+            --arg user "${{ github.actor }}" \
+            --argjson score "$TOTAL" \
+            --arg feedback "$FEEDBACK" \
+            '{github_username: $user, score: $score, feedback: $feedback}')
+
+          SIG=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/^.* //')
+
+          curl -sf -X POST "${WEBHOOK_URL}/webhook/eval" \
+            -H "Content-Type: application/json" \
+            -H "X-Signature-256: sha256=${SIG}" \
+            -d "$BODY"

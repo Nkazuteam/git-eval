@@ -4,7 +4,7 @@ from discord.ext import commands
 
 from bot.services import score as score_service
 from bot.services.role import update_role, _role_name
-from bot.config import RANK_NAMES
+from bot.config import RANK_NAMES, TEMPLATE_REPO_URL
 
 
 class Register(commands.Cog):
@@ -48,7 +48,9 @@ class Register(commands.Cog):
                 f"GitHub: `{github_username}`\n"
                 f"ランク: **{rank_label}**\n"
                 f"スコア: 0\n\n"
-                f"`/guide` で現在ランクの評価基準を確認できます。"
+                f"**まずはテンプレートリポジトリを clone しよう:**\n"
+                f"```\ngit clone {TEMPLATE_REPO_URL}\n```\n"
+                f"`/guide` で具体的なお題と評価基準を確認できます。"
             ),
             color=discord.Color.green(),
         )

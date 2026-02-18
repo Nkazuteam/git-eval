@@ -1,0 +1,121 @@
+name: Git-Eval F Rank
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Evaluate
+        id: eval
+        run: |
+          SCORE=0
+          FEEDBACK=""
+          INSTANT_FAIL=false
+
+          # Instant fail: .env committed
+          if find . -name '.env' -not -path './.git/*' | grep -q .; then
+            INSTANT_FAIL=true
+            FEEDBACK="${FEEDBACK}🚫 即アウト: .env ファイルが push されています\n"
+          fi
+
+          # Instant fail: CRLF
+          if grep -rPl '\r$' --include='*.js' --include='*.ts' --include='*.py' --include='*.json' --include='*.toml' --include='*.yaml' --include='*.yml' --include='*.md' --include='*.txt' . 2>/dev/null | head -1 | grep -q .; then
+            INSTANT_FAIL=true
+            FEEDBACK="${FEEDBACK}🚫 即アウト: CRLF 改行が検出されました\n"
+          fi
+
+          if [ "$INSTANT_FAIL" = true ]; then
+            SCORE=0
+            FEEDBACK="${FEEDBACK}\n即アウト条件に該当するため 0 点です。"
+          else
+            # Check 1: .gitignore exists and non-empty (20pts)
+            if [ -s .gitignore ]; then
+              SCORE=$((SCORE + 20))
+              FEEDBACK="${FEEDBACK}✅ .gitignore が適切に設定されています\n"
+            else
+              FEEDBACK="${FEEDBACK}❌ .gitignore が存在しないか空です\n"
+            fi
+
+            # Check 2: .gitattributes exists (15pts)
+            if [ -f .gitattributes ]; then
+              SCORE=$((SCORE + 15))
+              FEEDBACK="${FEEDBACK}✅ .gitattributes が存在します\n"
+            else
+              FEEDBACK="${FEEDBACK}❌ .gitattributes がありません\n"
+            fi
+
+            # Check 3: Project config file exists (25pts)
+            if ls package.json Cargo.toml pyproject.toml go.mod build.gradle pom.xml Gemfile composer.json 2>/dev/null | head -1 | grep -q .; then
+              SCORE=$((SCORE + 25))
+              FEEDBACK="${FEEDBACK}✅ プロジェクト設定ファイルが存在します\n"
+            else
+              FEEDBACK="${FEEDBACK}❌ プロジェクト設定ファイルが見つかりません (package.json, Cargo.toml, pyproject.toml 等)\n"
+            fi
+
+            # Check 4: Source directory exists (15pts)
+            if ls -d src/ lib/ app/ cmd/ pkg/ 2>/dev/null | head -1 | grep -q .; then
+              SCORE=$((SCORE + 15))
+              FEEDBACK="${FEEDBACK}✅ ソースディレクトリが存在します\n"
+            else
+              FEEDBACK="${FEEDBACK}❌ src/ 等のソースディレクトリがありません\n"
+            fi
+
+            # Check 5: README.md updated (10pts)
+            README_LINES=$(wc -l < README.md 2>/dev/null || echo 0)
+            if [ "$README_LINES" -gt 5 ]; then
+              SCORE=$((SCORE + 10))
+              FEEDBACK="${FEEDBACK}✅ README.md が更新されています\n"
+            else
+              FEEDBACK="${FEEDBACK}❌ README.md を自分のプロジェクト用に更新しましょう\n"
+            fi
+
+            # Check 6: No junk files committed (15pts)
+            if ! find . -path './.git' -prune -o \( -name 'node_modules' -o -name '__pycache__' -o -name '.DS_Store' -o -name 'Thumbs.db' -o -name '*.pyc' \) -print | grep -q .; then
+              SCORE=$((SCORE + 15))
+              FEEDBACK="${FEEDBACK}✅ 不要ファイルがコミットされていません\n"
+            else
+              FEEDBACK="${FEEDBACK}❌ 不要ファイル (node_modules, __pycache__ 等) がコミットされています\n"
+            fi
+          fi
+
+          FEEDBACK="${FEEDBACK}\n合計スコア: ${SCORE}/100"
+
+          echo "score=$SCORE" >> $GITHUB_OUTPUT
+          {
+            echo "feedback<<EVAL_EOF"
+            echo -e "$FEEDBACK"
+            echo "EVAL_EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Send results to Git-Eval
+        if: always()
+        env:
+          WEBHOOK_SECRET: ${{ secrets.GIT_EVAL_SECRET }}
+          WEBHOOK_URL: ${{ secrets.GIT_EVAL_URL }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ] || [ -z "$WEBHOOK_SECRET" ]; then
+            echo "Webhook not configured, skipping"
+            exit 0
+          fi
+
+          BODY=$(jq -n \
+            --arg user "${{ github.actor }}" \
+            --argjson score ${{ steps.eval.outputs.score }} \
+            --arg feedback "${{ steps.eval.outputs.feedback }}" \
+            '{github_username: $user, score: $score, feedback: $feedback}')
+
+          SIG=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/^.* //')
+
+          curl -sf -X POST "${WEBHOOK_URL}/webhook/eval" \
+            -H "Content-Type: application/json" \
+            -H "X-Signature-256: sha256=${SIG}" \
+            -d "$BODY"

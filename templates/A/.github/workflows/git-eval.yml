@@ -1,0 +1,196 @@
+name: Git-Eval A Rank
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read config
+        id: config
+        run: |
+          if [ -f git-eval-config.json ]; then
+            echo "build=$(jq -r '.build // empty' git-eval-config.json)" >> $GITHUB_OUTPUT
+            echo "test=$(jq -r '.test // empty' git-eval-config.json)" >> $GITHUB_OUTPUT
+            echo "lint=$(jq -r '.lint // empty' git-eval-config.json)" >> $GITHUB_OUTPUT
+          fi
+
+      - name: CI checks
+        id: ci
+        run: |
+          CI_SCORE=0
+          CI_FEEDBACK=""
+
+          # Test + Lint (10pts)
+          TEST_CMD="${{ steps.config.outputs.test }}"
+          LINT_CMD="${{ steps.config.outputs.lint }}"
+          PASS=0
+          TOTAL=0
+
+          if [ -n "$TEST_CMD" ]; then
+            TOTAL=$((TOTAL + 1))
+            if timeout 120 bash -c "$TEST_CMD" > /dev/null 2>&1; then
+              PASS=$((PASS + 1))
+              CI_FEEDBACK="${CI_FEEDBACK}✅ テスト通過\n"
+            else
+              CI_FEEDBACK="${CI_FEEDBACK}❌ テスト失敗\n"
+            fi
+          fi
+
+          if [ -n "$LINT_CMD" ]; then
+            TOTAL=$((TOTAL + 1))
+            if timeout 120 bash -c "$LINT_CMD" > /dev/null 2>&1; then
+              PASS=$((PASS + 1))
+              CI_FEEDBACK="${CI_FEEDBACK}✅ リンター通過\n"
+            else
+              CI_FEEDBACK="${CI_FEEDBACK}❌ リンターエラー\n"
+            fi
+          fi
+
+          if [ "$TOTAL" -gt 0 ] && [ "$PASS" -eq "$TOTAL" ]; then
+            CI_SCORE=10
+          elif [ "$PASS" -gt 0 ]; then
+            CI_SCORE=5
+          fi
+
+          # CRLF / .env check (10pts)
+          CLEAN=true
+          if find . -name '.env' -not -path './.git/*' 2>/dev/null | grep -q .; then
+            CI_FEEDBACK="${CI_FEEDBACK}❌ .env がコミットされています\n"
+            CLEAN=false
+          fi
+          if grep -rPl '\r$' --include='*.py' --include='*.js' --include='*.ts' --include='*.go' --include='*.rs' --include='*.java' . 2>/dev/null | grep -q .; then
+            CI_FEEDBACK="${CI_FEEDBACK}❌ CRLF 検出\n"
+            CLEAN=false
+          fi
+          if [ "$CLEAN" = true ]; then
+            CI_SCORE=$((CI_SCORE + 10))
+            CI_FEEDBACK="${CI_FEEDBACK}✅ .env / CRLF チェック OK\n"
+          fi
+
+          echo "ci_score=$CI_SCORE" >> $GITHUB_OUTPUT
+          {
+            echo "ci_feedback<<CI_EOF"
+            echo -e "$CI_FEEDBACK"
+            echo "CI_EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Collect source code
+        id: source
+        run: |
+          {
+            echo "code<<CODE_EOF"
+            find . -path './.git' -prune -o -path './node_modules' -prune -o \
+              \( -name '*.py' -o -name '*.js' -o -name '*.ts' -o -name '*.go' -o -name '*.rs' -o -name '*.java' -o -name '*.rb' \) \
+              -print | head -30 | while read f; do
+              echo "=== $f ==="
+              head -300 "$f"
+            done
+            if [ -f DECISION.md ]; then
+              echo "=== DECISION.md ==="
+              cat DECISION.md
+            fi
+            echo "CODE_EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: LLM evaluation
+        id: llm
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "llm_score=0" >> $GITHUB_OUTPUT
+            echo "llm_feedback=⏭️ ANTHROPIC_API_KEY 未設定" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          SOURCE_CODE="${{ steps.source.outputs.code }}"
+
+          PROMPT="あなたはシニアエンジニアとしてコードレビューを行います。以下のコードを A ランク（Architect）の基準で評価してください。
+
+          評価基準（各項目 0〜指定点で採点）:
+          1. アーキテクチャの妥当性: 0〜25 点
+          2. 言語イディオムの活用: 0〜15 点
+          3. トレードオフの根拠: 0〜20 点（DECISION.md がある場合はそちらも参照）
+          4. セキュリティへの配慮: 0〜10 点
+          5. DECISION.md の質: 0〜10 点（なければ 0 点）
+
+          必ず以下の JSON 形式で回答:
+          {\"architecture\": 点数, \"idiom\": 点数, \"tradeoff\": 点数, \"security\": 点数, \"decision_md\": 点数, \"feedback\": \"日本語フィードバック\"}
+
+          コード:
+          ${SOURCE_CODE}"
+
+          RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "$(jq -n \
+              --arg prompt "$PROMPT" \
+              '{model: "claude-sonnet-4-20250514", max_tokens: 1024, messages: [{role: "user", content: $prompt}]}')")
+
+          LLM_TEXT=$(echo "$RESPONSE" | jq -r '.content[0].text // empty')
+
+          if [ -n "$LLM_TEXT" ]; then
+            LLM_JSON=$(echo "$LLM_TEXT" | grep -oP '\{[^{}]*\}' | head -1)
+            if [ -n "$LLM_JSON" ]; then
+              A=$(echo "$LLM_JSON" | jq -r '.architecture // 0')
+              I=$(echo "$LLM_JSON" | jq -r '.idiom // 0')
+              T=$(echo "$LLM_JSON" | jq -r '.tradeoff // 0')
+              S=$(echo "$LLM_JSON" | jq -r '.security // 0')
+              DM=$(echo "$LLM_JSON" | jq -r '.decision_md // 0')
+              LLM_FB=$(echo "$LLM_JSON" | jq -r '.feedback // "評価完了"')
+              LLM_SCORE=$((A + I + T + S + DM))
+              echo "llm_score=$LLM_SCORE" >> $GITHUB_OUTPUT
+              {
+                echo "llm_feedback<<LLM_EOF"
+                echo "📝 設計 ${A}/25 | イディオム ${I}/15 | トレードオフ ${T}/20 | セキュリティ ${S}/10 | DECISION.md ${DM}/10"
+                echo "$LLM_FB"
+                echo "LLM_EOF"
+              } >> $GITHUB_OUTPUT
+            else
+              echo "llm_score=0" >> $GITHUB_OUTPUT
+              echo "llm_feedback=⚠️ LLM 応答の解析に失敗" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "llm_score=0" >> $GITHUB_OUTPUT
+            echo "llm_feedback=⚠️ LLM API エラー" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send results to Git-Eval
+        if: always()
+        env:
+          WEBHOOK_SECRET: ${{ secrets.GIT_EVAL_SECRET }}
+          WEBHOOK_URL: ${{ secrets.GIT_EVAL_URL }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ] || [ -z "$WEBHOOK_SECRET" ]; then
+            echo "Webhook not configured, skipping"
+            exit 0
+          fi
+
+          CI_SCORE=${{ steps.ci.outputs.ci_score }}
+          LLM_SCORE=${{ steps.llm.outputs.llm_score }}
+          TOTAL=$((CI_SCORE + LLM_SCORE))
+
+          FEEDBACK="【CI/CD】\n${{ steps.ci.outputs.ci_feedback }}\n【LLM 評価】\n${{ steps.llm.outputs.llm_feedback }}\n\n合計: ${TOTAL}/100"
+
+          BODY=$(jq -n \
+            --arg user "${{ github.actor }}" \
+            --argjson score "$TOTAL" \
+            --arg feedback "$FEEDBACK" \
+            '{github_username: $user, score: $score, feedback: $feedback}')
+
+          SIG=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/^.* //')
+
+          curl -sf -X POST "${WEBHOOK_URL}/webhook/eval" \
+            -H "Content-Type: application/json" \
+            -H "X-Signature-256: sha256=${SIG}" \
+            -d "$BODY"

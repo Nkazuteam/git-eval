@@ -1,0 +1,105 @@
+name: Git-Eval G Rank
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Evaluate
+        id: eval
+        run: |
+          SCORE=0
+          FEEDBACK=""
+
+          # Check 1: setup-prompt.sh exists (20pts)
+          if [ -f setup-prompt.sh ]; then
+            SCORE=$((SCORE + 20))
+            FEEDBACK="${FEEDBACK}✅ setup-prompt.sh が存在します\n"
+          else
+            FEEDBACK="${FEEDBACK}❌ setup-prompt.sh が見つかりません\n"
+          fi
+
+          # Check 2: Valid bash syntax (20pts)
+          if [ -f setup-prompt.sh ] && bash -n setup-prompt.sh 2>/dev/null; then
+            SCORE=$((SCORE + 20))
+            FEEDBACK="${FEEDBACK}✅ bash 構文チェック OK\n"
+          else
+            FEEDBACK="${FEEDBACK}❌ bash 構文エラーがあります\n"
+          fi
+
+          # Check 3: PS1 is set (20pts)
+          if [ -f setup-prompt.sh ] && grep -q 'PS1=' setup-prompt.sh; then
+            SCORE=$((SCORE + 20))
+            FEEDBACK="${FEEDBACK}✅ PS1 が設定されています\n"
+          else
+            FEEDBACK="${FEEDBACK}❌ PS1 が設定されていません\n"
+          fi
+
+          # Check 4: No CRLF (20pts)
+          if grep -rPl '\r$' --include='*.sh' --include='*.txt' --include='*.md' . 2>/dev/null | grep -q .; then
+            FEEDBACK="${FEEDBACK}❌ CRLF 改行が検出されました\n"
+          else
+            SCORE=$((SCORE + 20))
+            FEEDBACK="${FEEDBACK}✅ 改行コード OK (LF)\n"
+          fi
+
+          # Check 5: At least 2 commits (10pts)
+          COMMIT_COUNT=$(git rev-list --count HEAD)
+          if [ "$COMMIT_COUNT" -ge 2 ]; then
+            SCORE=$((SCORE + 10))
+            FEEDBACK="${FEEDBACK}✅ コミット数: ${COMMIT_COUNT}\n"
+          else
+            FEEDBACK="${FEEDBACK}❌ コミットが 2 つ以上必要です (現在: ${COMMIT_COUNT})\n"
+          fi
+
+          # Check 6: Meaningful commit messages (10pts)
+          BAD_MSGS=$(git log --format='%s' | grep -ciE '^(initial commit|update|fix|test|asdf|aaa)$' || true)
+          TOTAL_MSGS=$(git rev-list --count HEAD)
+          if [ "$BAD_MSGS" -lt "$TOTAL_MSGS" ] && [ "$TOTAL_MSGS" -gt 0 ]; then
+            SCORE=$((SCORE + 10))
+            FEEDBACK="${FEEDBACK}✅ コミットメッセージが意味のある内容です\n"
+          else
+            FEEDBACK="${FEEDBACK}❌ コミットメッセージを具体的に書きましょう\n"
+          fi
+
+          FEEDBACK="${FEEDBACK}\n合計スコア: ${SCORE}/100"
+
+          echo "score=$SCORE" >> $GITHUB_OUTPUT
+          {
+            echo "feedback<<EVAL_EOF"
+            echo -e "$FEEDBACK"
+            echo "EVAL_EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Send results to Git-Eval
+        if: always()
+        env:
+          WEBHOOK_SECRET: ${{ secrets.GIT_EVAL_SECRET }}
+          WEBHOOK_URL: ${{ secrets.GIT_EVAL_URL }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ] || [ -z "$WEBHOOK_SECRET" ]; then
+            echo "Webhook not configured, skipping"
+            exit 0
+          fi
+
+          BODY=$(jq -n \
+            --arg user "${{ github.actor }}" \
+            --argjson score ${{ steps.eval.outputs.score }} \
+            --arg feedback "${{ steps.eval.outputs.feedback }}" \
+            '{github_username: $user, score: $score, feedback: $feedback}')
+
+          SIG=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/^.* //')
+
+          curl -sf -X POST "${WEBHOOK_URL}/webhook/eval" \
+            -H "Content-Type: application/json" \
+            -H "X-Signature-256: sha256=${SIG}" \
+            -d "$BODY"

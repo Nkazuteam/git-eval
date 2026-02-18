@@ -25,6 +25,11 @@ RANK_THRESHOLDS: dict[str, int] = {
     "S": 8000,
 }
 
+TEMPLATE_REPO_URL: str = os.environ.get(
+    "TEMPLATE_REPO_URL",
+    "https://github.com/your-org/git-eval-template",
+)
+
 RANK_NAMES: dict[str, str] = {
     "G": "Generalist",
     "F": "Foundation",

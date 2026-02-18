@@ -1,0 +1,177 @@
+name: Git-Eval S Rank
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read config
+        id: config
+        run: |
+          if [ -f git-eval-config.json ]; then
+            echo "build=$(jq -r '.build // empty' git-eval-config.json)" >> $GITHUB_OUTPUT
+            echo "test=$(jq -r '.test // empty' git-eval-config.json)" >> $GITHUB_OUTPUT
+            echo "lint=$(jq -r '.lint // empty' git-eval-config.json)" >> $GITHUB_OUTPUT
+          fi
+
+      - name: CI checks
+        id: ci
+        run: |
+          CI_SCORE=0
+          CI_FEEDBACK=""
+
+          TEST_CMD="${{ steps.config.outputs.test }}"
+          LINT_CMD="${{ steps.config.outputs.lint }}"
+
+          if [ -n "$TEST_CMD" ] && timeout 120 bash -c "$TEST_CMD" > /dev/null 2>&1; then
+            CI_SCORE=$((CI_SCORE + 5))
+            CI_FEEDBACK="${CI_FEEDBACK}✅ テスト通過\n"
+          elif [ -n "$TEST_CMD" ]; then
+            CI_FEEDBACK="${CI_FEEDBACK}❌ テスト失敗\n"
+          fi
+
+          if [ -n "$LINT_CMD" ] && timeout 120 bash -c "$LINT_CMD" > /dev/null 2>&1; then
+            CI_SCORE=$((CI_SCORE + 5))
+            CI_FEEDBACK="${CI_FEEDBACK}✅ リンター通過\n"
+          elif [ -n "$LINT_CMD" ]; then
+            CI_FEEDBACK="${CI_FEEDBACK}❌ リンターエラー\n"
+          fi
+
+          echo "ci_score=$CI_SCORE" >> $GITHUB_OUTPUT
+          {
+            echo "ci_feedback<<CI_EOF"
+            echo -e "$CI_FEEDBACK"
+            echo "CI_EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Collect source code
+        id: source
+        run: |
+          {
+            echo "code<<CODE_EOF"
+            find . -path './.git' -prune -o -path './node_modules' -prune -o \
+              \( -name '*.py' -o -name '*.js' -o -name '*.ts' -o -name '*.go' -o -name '*.rs' -o -name '*.java' -o -name '*.rb' \) \
+              -print | head -40 | while read f; do
+              echo "=== $f ==="
+              head -300 "$f"
+            done
+            if [ -f DECISION.md ]; then
+              echo "=== DECISION.md ==="
+              cat DECISION.md
+            fi
+            echo "CODE_EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: LLM evaluation
+        id: llm
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "llm_score=0" >> $GITHUB_OUTPUT
+            echo "llm_feedback=⏭️ ANTHROPIC_API_KEY 未設定" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          SOURCE_CODE="${{ steps.source.outputs.code }}"
+
+          PROMPT="あなたは技術選定に厳しいシニアアーキテクトです。以下のコードを S ランク（Specialist）の基準で厳格に評価してください。
+
+          S ランクは最高ランクです。「目的に対して最適な手段を選んでいるか」が最重要です。
+          目的と手段の逆転（技術を使いたいだけ、オーバーエンジニアリング）には厳しく減点してください。
+
+          評価基準（各項目 0〜指定点で採点）:
+          1. 技術選定の適切さ: 0〜30 点
+             - 目的に対して最適な技術を選んでいるか
+             - 代替案と比較した上で選定しているか
+          2. 目的と手段の一致: 0〜25 点
+             - オーバースペックではないか
+             - 不足していないか
+             - YAGNI / KISS が守られているか
+          3. 創意工夫・最適化: 0〜20 点
+             - 独自のアプローチがあるか
+             - パフォーマンスへの配慮
+          4. 総合力: 0〜15 点
+             - コード品質、設計、テスト、ドキュメントの総合評価
+
+          DECISION.md がある場合は、コードと突き合わせて「判断の妥当性」を評価してください。
+
+          必ず以下の JSON 形式で回答:
+          {\"tech_selection\": 点数, \"purpose_means\": 点数, \"innovation\": 点数, \"overall\": 点数, \"feedback\": \"日本語フィードバック\"}
+
+          コード:
+          ${SOURCE_CODE}"
+
+          RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "$(jq -n \
+              --arg prompt "$PROMPT" \
+              '{model: "claude-sonnet-4-20250514", max_tokens: 1500, messages: [{role: "user", content: $prompt}]}')")
+
+          LLM_TEXT=$(echo "$RESPONSE" | jq -r '.content[0].text // empty')
+
+          if [ -n "$LLM_TEXT" ]; then
+            LLM_JSON=$(echo "$LLM_TEXT" | grep -oP '\{[^{}]*\}' | head -1)
+            if [ -n "$LLM_JSON" ]; then
+              TS=$(echo "$LLM_JSON" | jq -r '.tech_selection // 0')
+              PM=$(echo "$LLM_JSON" | jq -r '.purpose_means // 0')
+              IN=$(echo "$LLM_JSON" | jq -r '.innovation // 0')
+              OV=$(echo "$LLM_JSON" | jq -r '.overall // 0')
+              LLM_FB=$(echo "$LLM_JSON" | jq -r '.feedback // "評価完了"')
+              LLM_SCORE=$((TS + PM + IN + OV))
+              echo "llm_score=$LLM_SCORE" >> $GITHUB_OUTPUT
+              {
+                echo "llm_feedback<<LLM_EOF"
+                echo "📝 技術選定 ${TS}/30 | 目的手段 ${PM}/25 | 創意工夫 ${IN}/20 | 総合 ${OV}/15"
+                echo "$LLM_FB"
+                echo "LLM_EOF"
+              } >> $GITHUB_OUTPUT
+            else
+              echo "llm_score=0" >> $GITHUB_OUTPUT
+              echo "llm_feedback=⚠️ LLM 応答の解析に失敗" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "llm_score=0" >> $GITHUB_OUTPUT
+            echo "llm_feedback=⚠️ LLM API エラー" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send results to Git-Eval
+        if: always()
+        env:
+          WEBHOOK_SECRET: ${{ secrets.GIT_EVAL_SECRET }}
+          WEBHOOK_URL: ${{ secrets.GIT_EVAL_URL }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ] || [ -z "$WEBHOOK_SECRET" ]; then
+            echo "Webhook not configured, skipping"
+            exit 0
+          fi
+
+          CI_SCORE=${{ steps.ci.outputs.ci_score }}
+          LLM_SCORE=${{ steps.llm.outputs.llm_score }}
+          TOTAL=$((CI_SCORE + LLM_SCORE))
+
+          FEEDBACK="【CI/CD】\n${{ steps.ci.outputs.ci_feedback }}\n【LLM 評価】\n${{ steps.llm.outputs.llm_feedback }}\n\n合計: ${TOTAL}/100"
+
+          BODY=$(jq -n \
+            --arg user "${{ github.actor }}" \
+            --argjson score "$TOTAL" \
+            --arg feedback "$FEEDBACK" \
+            '{github_username: $user, score: $score, feedback: $feedback}')
+
+          SIG=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/^.* //')
+
+          curl -sf -X POST "${WEBHOOK_URL}/webhook/eval" \
+            -H "Content-Type: application/json" \
+            -H "X-Signature-256: sha256=${SIG}" \
+            -d "$BODY"
