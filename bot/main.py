@@ -4,7 +4,7 @@ from discord.ext import commands
 import uvicorn
 from fastapi import FastAPI
 
-from bot.config import DISCORD_TOKEN, GUILD_ID
+from bot.config import DISCORD_TOKEN, GUILD_ID, RANKS, RANK_NAMES
 
 intents = discord.Intents.default()
 intents.members = True
@@ -24,6 +24,16 @@ async def health():
 
 @bot.event
 async def on_ready():
+    guild_obj = bot.get_guild(GUILD_ID)
+    if guild_obj:
+        # Ensure all rank roles exist
+        existing_roles = {r.name for r in guild_obj.roles}
+        for rank in RANKS:
+            role_name = f"Git-Eval: {rank} ({RANK_NAMES[rank]})"
+            if role_name not in existing_roles:
+                await guild_obj.create_role(name=role_name)
+                print(f"Created role: {role_name}")
+
     guild = discord.Object(id=GUILD_ID)
     bot.tree.copy_global_to(guild=guild)
     await bot.tree.sync(guild=guild)

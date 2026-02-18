@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import logging
 
 import discord
 from fastapi import APIRouter, Request, HTTPException
@@ -8,6 +9,8 @@ from pydantic import BaseModel
 from bot.config import WEBHOOK_SECRET, GUILD_ID, RANKS
 from bot.services import score as score_service
 from bot.services.role import update_role, send_promotion_notification
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/webhook")
 
@@ -55,9 +58,6 @@ async def receive_eval(request: Request):
 
     # Update Discord role and send notification if promoted
     from bot.main import bot
-    import logging
-
-    logger = logging.getLogger(__name__)
 
     guild = bot.get_guild(GUILD_ID)
     promoted = False

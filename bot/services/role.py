@@ -1,6 +1,10 @@
+import logging
+
 import discord
 
 from bot.config import RANKS, RANK_NAMES, NOTIFICATION_CHANNEL_ID
+
+logger = logging.getLogger(__name__)
 
 
 def _role_name(rank: str) -> str:
@@ -19,12 +23,15 @@ async def update_role(guild: discord.Guild, member: discord.Member, old_rank: st
     old_role = discord.utils.get(guild.roles, name=old_role_name)
     if old_role and old_role in member.roles:
         await member.remove_roles(old_role)
+        logger.info("Removed role %s from %s", old_role_name, member)
 
     # Add new rank role (create if missing)
     new_role = discord.utils.get(guild.roles, name=new_role_name)
     if not new_role:
         new_role = await guild.create_role(name=new_role_name)
+        logger.info("Created role: %s", new_role_name)
     await member.add_roles(new_role)
+    logger.info("Assigned role %s to %s", new_role_name, member)
 
     return True
 
@@ -32,9 +39,6 @@ async def update_role(guild: discord.Guild, member: discord.Member, old_rank: st
 async def send_promotion_notification(
     guild: discord.Guild, member: discord.Member, new_rank: str
 ) -> None:
-    import logging
-    logger = logging.getLogger(__name__)
-
     if not NOTIFICATION_CHANNEL_ID:
         logger.warning("NOTIFICATION_CHANNEL_ID not set, skipping notification")
         return
