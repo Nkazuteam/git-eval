@@ -135,21 +135,21 @@ jobs:
 
           if [ -n "$LLM_TEXT" ]; then
             LLM_JSON=$(echo "$LLM_TEXT" | python3 -c "
-import sys, json
-text = sys.stdin.read()
-start = text.find('{')
-if start >= 0:
-    depth = 0
-    for i in range(start, len(text)):
-        if text[i] == '{': depth += 1
-        elif text[i] == '}': depth -= 1
-        if depth == 0:
-            try:
-                json.loads(text[start:i+1])
-                print(text[start:i+1])
-            except: pass
-            break
-")
+          import sys, json
+          text = sys.stdin.read()
+          start = text.find('{')
+          if start >= 0:
+              depth = 0
+              for i in range(start, len(text)):
+                  if text[i] == '{': depth += 1
+                  elif text[i] == '}': depth -= 1
+                  if depth == 0:
+                      try:
+                          json.loads(text[start:i+1])
+                          print(text[start:i+1])
+                      except: pass
+                      break
+          ")
             if [ -n "$LLM_JSON" ]; then
               INTENT=$(echo "$LLM_JSON" | jq -r '.intent // 0')
               BASICS=$(echo "$LLM_JSON" | jq -r '.basics // 0')
