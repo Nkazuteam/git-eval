@@ -70,6 +70,25 @@ jobs:
             echo "CI_EOF"
           } >> $GITHUB_OUTPUT
 
+      - name: Setup JSON parser
+        run: |
+          cat << 'PYEOF' > /tmp/parse_json.py
+          import sys, json
+          text = sys.stdin.read()
+          start = text.find('{')
+          if start >= 0:
+              depth = 0
+              for i in range(start, len(text)):
+                  if text[i] == '{': depth += 1
+                  elif text[i] == '}': depth -= 1
+                  if depth == 0:
+                      try:
+                          json.loads(text[start:i+1])
+                          print(text[start:i+1])
+                      except: pass
+                      break
+          PYEOF
+
       - name: Collect source code
         id: source
         run: |
@@ -128,22 +147,7 @@ jobs:
 
           if [ -n "$LLM_TEXT" ]; then
             # Extract JSON from response
-            LLM_JSON=$(echo "$LLM_TEXT" | python3 -c "
-          import sys, json
-          text = sys.stdin.read()
-          start = text.find('{')
-          if start >= 0:
-              depth = 0
-              for i in range(start, len(text)):
-                  if text[i] == '{': depth += 1
-                  elif text[i] == '}': depth -= 1
-                  if depth == 0:
-                      try:
-                          json.loads(text[start:i+1])
-                          print(text[start:i+1])
-                      except: pass
-                      break
-          ")
+            LLM_JSON=$(echo "$LLM_TEXT" | python3 /tmp/parse_json.py)
             if [ -n "$LLM_JSON" ]; then
               R=$(echo "$LLM_JSON" | jq -r '.readability // 0')
               D=$(echo "$LLM_JSON" | jq -r '.design // 0')
